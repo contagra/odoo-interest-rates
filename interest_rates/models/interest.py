@@ -1,50 +1,160 @@
-import logging
-
 from odoo import api, fields, models, _
-
-_logger = logging.getLogger(__name__)
+import time
 
 
 class Interest(models.Model):
-    _name = "interest"
-    _description = "Interest"
+    _name = 'interest'
+    _description = 'Interest'
     _order = 'active desc, name'
 
     name = fields.Char(string='Name', required=True)
-    rate = fields.Float(compute='_compute_current_rate', string='Current Rate', digits=0,
+    rate = fields.Float(compute='_compute_current_rate',
+                        string='Current Rate',
+                        digits=(16, 2),
                         help='The rate current interest rate')
     rate_ids = fields.One2many('interest.rate', 'interest_id', string='Rates')
     active = fields.Boolean(default=True)
     date = fields.Date(compute='_compute_date')
-    company_id = fields.Many2one('res.company', string='Company',
+    company_id = fields.Many2one('res.company',
+                                 string='Company',
                                  default=lambda self: self.env.company)
 
     _sql_constraints = [
-        ('unique_name', 'unique (name,company_id)', 'The interest name must be unique!'),
+        ('unique_name', 'unique (name,company_id)',
+         'The interest name must be unique!'),
     ]
 
-    def _get_rates(self, date):
-        self.env['interest.rate'].flush(['rate', 'interest_id', 'name'])
-        query = """SELECT c.id,
-                          COALESCE((SELECT r.rate FROM interest_rate r
-                                  WHERE r.interest_id = c.id AND r.name <= %s
-                               ORDER BY r.name DESC
-                                  LIMIT 1), 0.0) AS rate
-                   FROM interest c
-                   WHERE c.id IN %s"""
-        self._cr.execute(query, (date, tuple(self.ids)))
-        interest_rates = dict(self._cr.fetchall())
-        return interest_rates
+    @api.model
+    def _get_rate(self, date):
+        self.ensure_one()
+        rates = self.rate_ids.filtered(lambda rate: rate.name <= date).sorted(
+            key='name', reverse=True)
+        return rates[0].rate if len(rates) else 0.0
 
     @api.depends('rate_ids.rate')
     def _compute_current_rate(self):
-        date = self._context.get('date') or fields.Date.today()
-        # selects the last rate before date
-        interest_rates = self._get_rates(date)
+        date = fields.Date.today()
         for interest in self:
-            interest.rate = interest_rates.get(interest.id) or 0.0
+            interest.rate = interest._get_rate(date)
 
     @api.depends('rate_ids.name')
     def _compute_date(self):
         for interest in self:
             interest.date = interest.rate_ids[:1].name
+
+
+class InterestPlus(models.Model):
+    _name = 'interest.plus'
+    _description = 'Interest Plus'
+    _order = 'name'
+
+    name = fields.Char('Name',
+                       compute='_compute_name',
+                       readonly=True,
+                       store=True)
+    rate = fields.Float(compute='_compute_current_rate',
+                        string='Current Rate',
+                        digits=(16, 2),
+                        help='The rate current interest rate')
+    interest_id = fields.Many2one('interest', string='Interest', required=True)
+    plus_rate = fields.Float(string='Plus Rate',
+                             digits=(16, 2),
+                             default=0.0,
+                             help='The plus rate additional to interest rate')
+    date = fields.Date(compute='_compute_date')
+    company_id = fields.Many2one('res.company',
+                                 string='Company',
+                                 default=lambda self: self.env.company)
+
+    _sql_constraints = [
+        ('unique_name', 'unique (name, company_id)',
+         'The name must be unique!'),
+    ]
+
+    @api.constrains('plus_rate')
+    def _check_plus_rate(self):
+        if self.plus_rate < 0 or self.plus_rate > 100:
+            raise ValidationError(_('Plus Rate value must be a percent.'))
+
+    @api.depends('interest_id', 'plus_rate')
+    @api.onchange('interest_id', 'plus_rate')
+    def _compute_name(self):
+        for interest_plus in self:
+            interest_plus.name = _('%s +%s%%') % (
+                interest_plus.interest_id.name, interest_plus.plus_rate)
+
+    @api.model
+    def _get_rate(self, date):
+        self.ensure_one()
+        rates = self.interest_id.rate_ids.filtered(
+            lambda rate: rate.name <= date).sorted(key='name', reverse=True)
+        return (rates[0].rate if len(rates) else 0.0) + self.plus_rate
+
+    @api.depends('interest_id.rate_ids')
+    def _compute_current_rate(self):
+        date = fields.Date.today()
+        for interest_plus in self:
+            interest_plus.rate = interest_plus._get_rate(date)
+
+    @api.depends('interest_id.rate_ids')
+    def _compute_date(self):
+        for interest in self:
+            interest_plus.date = interest_plus.interest_id.rate_ids[:1].name
+
+
+class InterestRate(models.Model):
+    _name = 'interest.rate'
+    _description = 'Interest Rate'
+    _order = 'name desc'
+
+    name = fields.Date(string='Date',
+                       required=True,
+                       index=True,
+                       default=lambda self: fields.Date.today())
+    rate = fields.Float(string='Rate',
+                        digits=(16, 2),
+                        default=0.0,
+                        help='The rate of interest')
+    interest_id = fields.Many2one('interest', string='Interest', required=True)
+
+    _sql_constraints = [
+        ('unique_name_per_day', 'unique (name,interest_id)',
+         'Only one interest rate per day allowed!'),
+    ]
+
+    @api.constrains('rate')
+    def _check_rate(self):
+        if self.rate < 0 or self.rate > 100:
+            raise ValidationError(_('Rate value must be a percent.'))
+
+    @api.model
+    def _name_search(self,
+                     name,
+                     args=None,
+                     operator='ilike',
+                     limit=100,
+                     name_get_uid=None):
+        if operator in ['=', '!=']:
+            try:
+                date_format = '%Y-%m-%d'
+                if self._context.get('lang'):
+                    lang_id = self.env['res.lang']._search(
+                        [('code', '=', self._context['lang'])],
+                        access_rights_uid=name_get_uid)
+                    if lang_id:
+                        date_format = self.browse(lang_id).date_format
+                name = time.strftime('%Y-%m-%d',
+                                     time.strptime(name, date_format))
+            except ValueError:
+                try:
+                    args.append(('rate', operator, float(name)))
+                except ValueError:
+                    return []
+                name = ''
+                operator = 'ilike'
+        return super(InterestRate,
+                     self)._name_search(name,
+                                        args=args,
+                                        operator=operator,
+                                        limit=limit,
+                                        name_get_uid=name_get_uid)
