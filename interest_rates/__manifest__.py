@@ -9,7 +9,7 @@
     "license": "AGPL-3",
     "category": "Financial Management/Configuration",
     "summary": "Update the lending rate / interest rate",
-    "depends": ["base"],
+    "depends": ["base", "account"],
     "data": [
         "security/ir.model.access.csv",
         "security/interest.xml",
