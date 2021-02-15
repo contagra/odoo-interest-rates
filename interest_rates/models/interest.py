@@ -43,9 +43,9 @@ class Interest(models.Model):
             interest.date = interest.rate_ids[:1].name
 
 
-class InterestPlus(models.Model):
-    _name = 'interest.plus'
-    _description = 'Interest Plus'
+class InterestAdjusted(models.Model):
+    _name = 'interest.adjusted'
+    _description = 'Interest Adjusted'
     _order = 'name'
 
     name = fields.Char('Name',
@@ -57,10 +57,15 @@ class InterestPlus(models.Model):
                         digits=(16, 2),
                         help='The rate current interest rate')
     interest_id = fields.Many2one('interest', string='Interest', required=True)
-    plus_rate = fields.Float(string='Plus Rate',
-                             digits=(16, 2),
-                             default=0.0,
-                             help='The plus rate additional to interest rate')
+    adjustment_type = fields.Selection(selection=[('plus', 'Plus'),
+                                                  ('minus', 'Minus')],
+                                       string='Adjustment Type',
+                                       default='plus',
+                                       required=True)
+    adjustment_rate = fields.Float(string='Adjustment Rate',
+                                   digits=(16, 2),
+                                   default=0.0,
+                                   help='The adjustment rate interest rate')
     date = fields.Date(compute='_compute_date')
     company_id = fields.Many2one('res.company',
                                  string='Company',
@@ -71,35 +76,43 @@ class InterestPlus(models.Model):
          'The name must be unique!'),
     ]
 
-    @api.constrains('plus_rate')
-    def _check_plus_rate(self):
-        if self.plus_rate < 0 or self.plus_rate > 100:
-            raise ValidationError(_('Plus Rate value must be a percent.'))
+    @api.constrains('adjustment_rate')
+    def _check_adjustment_rate(self):
+        if self.adjustment_rate < 0 or self.adjustment_rate > 100:
+            raise ValidationError(
+                _('Adjustment Rate value must be a percent.'))
 
-    @api.depends('interest_id', 'plus_rate')
-    @api.onchange('interest_id', 'plus_rate')
+    @api.depends('interest_id', 'adjustment_rate')
+    @api.onchange('interest_id', 'adjustment_rate')
     def _compute_name(self):
-        for interest_plus in self:
-            interest_plus.name = _('%s +%s%%') % (
-                interest_plus.interest_id.name, interest_plus.plus_rate)
+        for interest_adjusted in self:
+            interest_adjusted.name = _('%s %s%s%%') % (
+                interest_adjusted.interest_id.name,
+                '+' if interest_adjusted.adjustment_type == 'plus' else '-',
+                interest_adjusted.adjustment_rate)
 
     @api.model
     def _get_rate(self, date):
         self.ensure_one()
         rates = self.interest_id.rate_ids.filtered(
             lambda rate: rate.name <= date).sorted(key='name', reverse=True)
-        return (rates[0].rate if len(rates) else 0.0) + self.plus_rate
+        rate = rates[0].rate if len(rates) else 0.0
+        return max(
+            rate +
+            self.adjustment_rate if self.adjustment_type == 'plus' else rate -
+            self.adjustment_rate, 0.0)
 
     @api.depends('interest_id.rate_ids')
     def _compute_current_rate(self):
         date = fields.Date.today()
-        for interest_plus in self:
-            interest_plus.rate = interest_plus._get_rate(date)
+        for interest_adjusted in self:
+            interest_adjusted.rate = interest_adjusted._get_rate(date)
 
     @api.depends('interest_id.rate_ids')
     def _compute_date(self):
         for interest in self:
-            interest_plus.date = interest_plus.interest_id.rate_ids[:1].name
+            interest_adjusted.date = interest_adjusted.interest_id.rate_ids[:
+                                                                            1].name
 
 
 class InterestRate(models.Model):
