@@ -3,7 +3,7 @@
 
 {
     "name": "Interest Rates",
-    "version": "13.0.1.0.1",
+    "version": "1.0.1",
     "author": "Agrista GmbH",
     "website": "https://github.com/agrista/odoo-interest-rates",
     "license": "AGPL-3",

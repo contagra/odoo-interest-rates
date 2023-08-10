@@ -1,4 +1,5 @@
 from odoo import api, fields, models, _
+from odoo.exceptions import ValidationError
 import time
 
 
@@ -100,7 +101,7 @@ class InterestAdjusted(models.Model):
         return max(
             rate +
             self.adjustment_rate if self.adjustment_type == 'plus' else rate -
-            self.adjustment_rate, 0.0)
+                                                                        self.adjustment_rate, 0.0)
 
     @api.depends('interest_id.rate_ids')
     def _compute_current_rate(self):
@@ -111,8 +112,7 @@ class InterestAdjusted(models.Model):
     @api.depends('interest_id.rate_ids')
     def _compute_date(self):
         for interest in self:
-            interest_adjusted.date = interest_adjusted.interest_id.rate_ids[:
-                                                                            1].name
+            interest.date = interest.interest_id.rate_ids[:1].name
 
 
 class InterestRate(models.Model):
